@@ -32,8 +32,9 @@ float p_radius;
 // there is exactly parallel to the edge, so the boundary's deviation from straight grows only with
 // the square of the distance travelled. Dropping the exponent below 2 sharpens the curve so it
 // bends away almost immediately, at the cost of the cap looking a bit more like a pointed lens than
-// a perfectly soft circular pill. 1.5 was chosen as a moderate middle ground between the two.
-static const float CORNER_NORM_EXPONENT = 1.5;
+// a perfectly soft circular pill. Back to a true circle now that the feather is crisp (fwidth-based)
+// instead of the old fixed 3px blur, which was what made the flat run at the tip look exaggerated.
+static const float CORNER_NORM_EXPONENT = 2.0;
 
 float4 MainPS(VertexShaderOutput input) : COLOR
 {
@@ -47,15 +48,18 @@ float4 MainPS(VertexShaderOutput input) : COLOR
 	float cornerDist = pow(pow(qPos.x, CORNER_NORM_EXPONENT) + pow(qPos.y, CORNER_NORM_EXPONENT), 1.0 / CORNER_NORM_EXPONENT);
 	float dist = cornerDist + min(max(q.x, q.y), 0) - p_radius;
 
-	// Anti-aliased feather, in the same "virtual" pixel units as p_size/p_radius. UI is drawn
-	// through WindowManager.Scale, so a button's actual on-screen pixel footprint can be smaller
-	// than its virtual Width/Height (e.g. when the window/backbuffer is smaller than the virtual
-	// UI resolution) - shrinking a too-thin feather below a single real screen pixel and leaving
-	// the boundary under-antialiased. That's especially visible right at a rounded cap's tip,
-	// where the true curve is already only fractions of a pixel wide, so a hard edge there reads
-	// as "flat, then a sudden step into the curve". Feather is kept wide enough to stay above one
-	// real pixel with margin even when downscaled.
-	float coverage = 1 - smoothstep(0, 3, dist);
+	// Anti-aliased feather sized from the screen-space derivative of dist rather than a fixed virtual-
+	// pixel constant. fwidth(dist) is how much dist changes between adjacent real pixels, so this always
+	// resolves to ~1 real pixel of blur. crisp at native (1:1) UI scale, but still automatically widens
+	// enough to stay anti-aliased if the button is ever drawn smaller than its virtual size (e.g. a
+	// downscaled backbuffer), instead of a fixed constant that's either too blurry or too jagged
+	// depending on scale.
+	//
+	// The window is [-aa, 0] rather than centered on 0 so the blur only ever eats into the shape's own
+	// interior, never bleeding past its true (p_size/p_radius-defined) footprint - matters for
+	// pixel-perfect layout/hover bounds that assume the visible edge never exceeds the logical one.
+	float aa = max(fwidth(dist), 0.0001);
+	float coverage = 1 - smoothstep(-aa, 0, dist);
 
 	float4 texColor = tex2D(SpriteTextureSampler, input.TextureCoordinates);
 	float4 color = texColor * input.Color;
